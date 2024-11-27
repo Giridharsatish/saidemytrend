@@ -1,71 +1,81 @@
+def registry = 'https://ngiridhar.jfrog.io'
+
 pipeline {
     agent any
     environment {
-        PATH = "/opt/maven/bin:$PATH"
+        MAVEN_HOME = '/opt/maven'
     }
 
     stages {
-        stage("build") {
+        stage("Build") {
             steps {
-                echo "--------- build started ----------"
-                sh 'mvn clean deploy -Dmaven.test.skip=true'
-                echo "--------- build completed --------"
+                echo "--------- Build started ----------"
+                withEnv(["PATH=${MAVEN_HOME}/bin:${env.PATH}"]) {
+                    sh 'mvn clean deploy -Dmaven.test.skip=true' // Skipping tests during build
+                }
+                echo "--------- Build completed --------"
             }
         }
 
-        stage('test') {
+        stage("Test") {
             steps {
-                echo "---------- unit test started -------"
-                sh 'mvn test' // This will actually run the tests
-                echo "---------- unit test completed -------"
+                echo "---------- Unit tests started -------"
+                withEnv(["PATH=${MAVEN_HOME}/bin:${env.PATH}"]) {
+                    sh 'mvn test' // Running tests separately
+                }
+                echo "---------- Unit tests completed -------"
             }
         }
 
-        stage('SonarQube analysis') {
+        stage('SonarQube Analysis') {
             environment {
                 scannerHome = tool 'saidemy-sonar-scanner'
             }
             steps {
                 withSonarQubeEnv('saidemy-sonarqube-server') {
-                    sh "${scannerHome}/bin/sonar-scanner"
+                    echo "---------- SonarQube analysis started -------"
+                    sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=your_project_key -Dsonar.projectName=your_project_name"
+                    echo "---------- SonarQube analysis completed -------"
                 }
             }
         }
 
-        stage("Quality gate") {
+        stage("Quality Gate") {
             steps {
                 script {
+                    echo "---------- Checking Quality Gate status -------"
                     timeout(time: 1, unit: 'HOURS') {
                         def qg = waitForQualityGate()
                         if (qg.status != 'OK') {
                             error "Pipeline aborted due to quality gate failure: ${qg.status}"
                         }
                     }
+                    echo "---------- Quality Gate passed -------"
                 }
             }
         }
 
-        stage('jar publish') {
+        stage("Publish JAR to Artifactory") {
             steps {
                 script {
-                    echo "------------ jar publish started ---------------"
-                    def server = artifactory.server("artifactory-server-name") // Correct server config
+                    echo "------------ Publishing JAR started ---------------"
+                    def server = artifactory.server("artifactory-server-name") // Ensure server is defined
                     def properties = "buildid=${env.BUILD_ID},commitid=${GIT_COMMIT}"
                     def uploadSpec = """{
-                        "files":  [
+                        "files": [
                             {
-                                "pattern": "jarstaging/(*)",
-                                "target": "giridhar-libs-release-local/{1}",
+                                "pattern": "jarstaging/*.jar",
+                                "target": "giridhar-libs-release-local/",
                                 "flat": "false",
                                 "props": "${properties}",
-                                "exclusions" : [ "*.sha1", "*.md5"]
+                                "exclusions": ["*.sha1", "*.md5"]
                             }
                         ]
                     }"""
                     def buildInfo = server.upload(uploadSpec)
                     buildInfo.env.collect()
                     server.publishBuildInfo(buildInfo)
-                    echo "-------------- jar publish ended --------------"
+                    echo "-------------- JAR publish completed --------------"
                 }
             }
         }
